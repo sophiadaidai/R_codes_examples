@@ -1,0 +1,187 @@
+---
+title: "HW8"
+author: "Sophia Dai"
+---
+
+## 1. Outlier detection and statisitcs
+
+### a. Load data
+load csv data into the dataframe data. The dataframe is converted so that each column represents one variable, and each row represents one date. The date is added at the last column (for the purpose of plotting). Thus, the dimension of the dataframe is 267 by 6. 
+
+```{r load data}
+data <- read.csv(file = "data.csv", header = TRUE,row.names = 1)
+data <- as.data.frame(t(data))
+data$date <- factor(rownames(data))
+head(data)
+```
+
+
+### b. Outlier detection
+
+First, I plot each time series to have a general look at the pattern.
+
+```{r, fig.height= 4, fig.width= 8}
+plot(data$date,data$`GDP Level`, xlab = "dates", ylab = "GDP")
+```
+```{r, fig.height= 4, fig.width= 8}
+plot(data$date,data$`LIBOR  1M, %`, xlab = "dates", ylab = "Libor")
+```
+```{r, fig.height= 4, fig.width= 8}
+plot(data$date,data$`Equities Index 1 (index points)`, xlab = "dates", ylab = "Equity 1")
+```
+```{r, fig.height= 4, fig.width= 8}
+plot(data$date,data$`Equities Index 2 (index points)`, xlab = "dates", ylab = "Equity 2")
+```
+```{r, fig.height= 4, fig.width= 8}
+data5 = data$`Equities Index 3 (index points)`
+plot(data$date,data$`Equities Index 3 (index points)`, xlab = "dates", ylab = "Equity 3")
+```
+
+
+The GDP data is a quaterly relative smooth data with deterministic trend. LIBOR, equity 1 and equity 2 are volatile and have some periodic pattern. The equity 3 data has a lot of N/A at the beginning and apperently has two separate clusters of subsets of data. As a commmon approach, I applied the algorithim of Hampel filter to detect any outlier which are more than three standard deviations from the median of itself. In this function, inputArray is the time series to be found outliers; moving window size is 2*k+1 (which is always an odd integer), threshold is the multiple of standard deviation to define the outlier, with plot = TRUE, a plot of the times series with outlier marked as red will be shown. The function also returns the index of the outlier point(s).
+
+```{r median outlier function}
+medFilterFunc <- function(inputArray, k, threshold = 3, plot = TRUE){
+    movingMedian = runmed(inputArray, 2*k+1)
+    scale = 1.4826
+    sigma = rep(1000000, length(inputArray))
+    
+    for (i in (k+1):(length(inputArray)-k)){
+        sigma[i] = scale* median(abs(inputArray[(i-k):(i+k)] - movingMedian[i]))
+    }
+    outlierID = abs(inputArray-movingMedian) >= (threshold*sigma)
+    print(which(outlierID))
+    
+    if(plot == TRUE){
+        plot(inputArray, type = 'l')
+        points(which(outlierID), inputArray[outlierID], col = "dark red",pch=16)
+    }
+}
+```
+
+Based on characteristics of each time series, I applied the filter with different parameters.
+
+GDP data: remove N/A in GDP
+```{r apply filter function to GDP}
+medFilterFunc(data$`GDP Level`[!is.na(data$`GDP Level`)], k = 3, threshold = 3, plot = TRUE)
+```
+Libor 1M data:
+```{r apply filter function to libor rate}
+medFilterFunc(data$`LIBOR  1M, %`, k =5)
+```
+
+Equity 1 data:
+```{r apply filter function to Equity 1}
+medFilterFunc(data$`Equities Index 1 (index points)`, k =5)
+```
+
+
+Equity 2 data: Remove N/A in Equity Index 2
+```{r apply filter function to Equity 2}
+data4 = data$`Equities Index 2 (index points)`
+data4 = data4[!is.na(data4)]
+plot(data4, type = 'b')
+medFilterFunc(data4, k = 6)
+```
+
+
+Equity 3 data: Remove N/A in Equity Index 3 and separate the two sub-set due to the dramatic change from 2015/02 to 2015/03 and apply the filter function to set-sets separately. As shown below, there is no significant outlier in the two subsets of data.
+```{r apply filter function to Euqity 3}
+data5 = data$`Equities Index 3 (index points)`
+data5 = data5[!is.na(data5)]
+plot(data5, type = 'l')
+data5_1 = data5[1:66]
+data5_2 = data5[67:length(data5)]
+medFilterFunc(data5_1, k =2)
+medFilterFunc(data5_2, k =2)
+```
+
+
+### c. Build Quarterly Model for Equity 2
+To choose the variable(s) in the quarterly model of equity index 2, first let's take a look at the 2D plots between each two variables in data. It's hard to see any correlation between the time series, we can only tell some correlation between equity index 2 and GDP since they both have upward trends.
+```{r plot data, fig.height= 4, fig.width= 8}
+data_quart = data[!is.na(data$`GDP Level`),]
+plot(data_quart)
+```
+
+
+Since GDP evaluete the economic situation in the past three months, I transfer the equity index 2 monthly data to quartly by averaging the 3-month monthly data.
+```{r get quarterly data}
+gdp = data$`GDP Level`[!is.na(data$`GDP Level`)]
+
+equity2 = rep(0, length(data$`Equities Index 2 (index points)`)/3)
+# average the monthly Equity Index 1 data and get the quarterly data
+for (i in 1:length(data$`Equities Index 2 (index points)`)){
+    if (i %% 3 == 0){
+        equity2[i/3] = (data$`Equities Index 2 (index points)`[i-2] + 
+                          data$`Equities Index 2 (index points)`[i-1] +
+                          data$`Equities Index 2 (index points)`[i])/3
+    }
+}
+```
+Run correlation test between gdp and equity2 quarterly data, we see 74.87% correlation, which is pretty high. It makes sense because the performance of the equity is affected by the macro-economic condition, which is highly related to the GDP data.
+```{r correlation: gdp vs equity 2}
+cor.test(gdp, equity2)
+```
+
+Run similar correlation test between equity2 quarterly data and other variables, we do not see a high correlation.
+```{r correlation: libor vs equity 2}
+libor = rep(0, length(data$`LIBOR  1M, %`)/3)
+for (i in 1:length(data$`LIBOR  1M, %`)){
+    if (i %% 3 == 0){
+        libor[i/3] = (data$`LIBOR  1M, %`[i-2] + 
+                          data$`LIBOR  1M, %`[i-1] +
+                          data$`LIBOR  1M, %`[i])/3
+    }
+}
+cor.test(libor, equity2)
+```
+
+
+Also, according to the plot of equity2, we see serial correlations in the data, so I take a look at the PACF figure of equity 2 here. It shows that there is order one autocorrelation in the data.
+```{r PACF, fig.height= 4, fig.width= 8}
+pacf(equity2[4:length(equity2)])
+```
+
+Plot the equity 2 data against to the lagged-one data, we can also see highly linear correlation between them.
+```{r equity 2 vs lagged-one plot, fig.height= 4, fig.width= 8}
+plot(equity2[4:(length(equity2)-1)], equity2[5:length(equity2)], xlab = "lagged-one equity 2",
+ylab = "equity 2")
+```
+
+To build a simple model, I will apply linear regression based on two regressors: (1) gdp time series (2) lagged-one equity 2 time series. The first three data points in equity 2 are N/A, so we removed all first three points in both GDP and equity 2 times series. Since gdp (10^5) data and equity data (10^3 or 10^4) have different scale, I apply the log transformation before the regression. The ANOVA table of the regression results are shown as below. As can be seen in the table, both regressors are significant and the two regressors explain about 92.7% of the total sum of squares.
+```{r regression}
+anova(lm(log(equity2[5:89]) ~ log(gdp[5:89])+log(equity2[4:88])))
+```
+This is a simple linear regression model based on GDP and lagged-1 regressors. It already expains 92.7& of the variance and it may be improved by applying ARCH(1) or GARCH(1,1) model since we can see that there is variaty in the variance of the Equity 2 data.
+
+
+## 2. Model Selection
+
+### a. Number of Models
+There are N indicator variables, and each of them can be either 0 or 1, so there are 2^N models in total.
+
+### b. Build function
+```{r implement ModelChoice function}
+ModelChoice <- function(N){
+    M = matrix(, nrow = 2**N, ncol = N)
+    i = 0
+    for (colNum in (N:1)){
+        M[ , colNum] = rep(c(rep(0,2**i),rep(1,2**i)),2**(N-1-i))
+        i = i + 1
+    }
+    return(M)
+}
+```
+
+A test sample with four regressions in total:
+```{r test with 4}
+M = ModelChoice(4)
+print (M)
+```
+
+### c. Find "best" model
+Since I already come up with all possible models in last question, I would prefer the "Best Subset" approach to find the best model. Basically, I will apply ols regression to each of the 2^N model and compute the R-sqaure. The best model is the model with highest R-sqaure value. Similarly we can also use other criteria. For example, we can compare and choose the model with highest Mallow's C_p.
+
+### d. Expect number of "good" model
+The last question is related to the multiple comparison problem.If a single test is performed at a confidence level 95%, then there is only 5% chance of incorrectly reject the null hypothesis given the hypothesis is true. If there are k tests performed simultaneously and given that all null hypothses are true, then the expected number of incorrect rejection (Type 1 error) is 0.05k. Assuming all tests are statistically independent, then the probablity of all correct rejection is 0.95^k which is very small as k becomes very large (approximately becomes 0.6% if k = 100).This leads to the need to correct the family-wise error rate to have a much more strict significant level (e.g. Bonferroni correction or other correction methods).
