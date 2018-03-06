@@ -1,0 +1,146 @@
+---
+output: html_document
+---
+
+## An Exploration of the Influence of the Age of a Patient on the Likelihood of Abusing Alcohol, Cocaine, Marijuana, or Heroine
+### The Data Divas: Simin Chen, Huiyuan Dai, & Jessica Huang
+*Statistics 152 || Professor Nolan || Spring 2015*
+
+#### Abstract
+This project looks at a complex survey dataset from the Drug Abuse Warning Network (DAWN). This project is interested in seeing if there is a significant difference between a patient’s age category on the types of drugs that are detected in their bodies at the time of his or her Emergency Department (ED) visit. Since there are over 2,000 unique drugs that were found, only the top 4 drugs found in patients, namely Alcohol, Cocaine, Marijuana, and Heroine, were analyzed. Chi-Square Tests of Homogeneity were performed on the data to see if there was a significant difference between the occurrence of the above-mentioned drugs in each of the 11 age categories of the patients. Significant results were found for each drug, which implies that the likelihood of using these drugs changes with age.
+
+#### Survey Overview
+The dataset analyzed was the 2011 Drug Abuse Warning Network (DAWN) survey data. DAWN is a public health surveillance system that is nationally representative, and monitors Emergency Department (ED) visits that are drug related. Although DAWN has been tracking this information since the 1970s, we decided only to look at 2011’s data, the most recent year available on their website.  
+
+In order to qualify as a hospital in the population that DAWN samples from, the hospital must be a non-federal, short-stay, general medical or surgical hospital in the United States that has at least one ED that operates 24 hours a day. A plethora of information is recorded for each ED visit, including but not limited to: Age Category, Sex, Race, Case Type of the visit, Categorized Time of Day, Quarter of the Year, Metropolitan Area, and a variety of information regarding the various unique drugs that are related to and reported for each visit.	
+	
+In 2011, the overall weighted response rate for this survey was 35.2 percent. A total of 233 hospitals submitted data to DAWN, with 229,211 drug-related ED visits identified for analysis. The hospital nonresponses, coverage bias of the EDs, as well as the unequal probability of selection is accounted for in the variable CASEWGT, a column of adjusted weights provided in the survey dataset.
+
+#### Data Preparation Process
+
+```{r, message = FALSE, warning = FALSE}
+## Load data
+load("~/Google Drive/UCB/Fourth Year/Stats 152/Stats 152 - The Data Divas/Stat 152 DA3/DAWN.rda")
+dawn = da34565.0001
+rm(da34565.0001)
+
+## Install relevant packages
+library("survey")
+library("DMwR")
+
+## Impute missing Age and Sex data using K-Nearest Neighbor Imputation
+test = knnImputation(dawn[, c("METRO", "PSU", "SEX")], k = 10, meth = 'median')
+test1 = cbind(test, AGECAT = dawn$AGECAT)
+test2 = knnImputation(test1[, c("METRO", "PSU", "SEX", "AGECAT")], k = 10, meth = 'median')
+
+## Determine most commonly reported drugs
+drugdf = dawn[, grep("DRUGID", names(dawn))]
+l = apply(drugdf, 2, function(x) substr(x, 16, 1000000L))
+topdrug = sort(table(l), TRUE)
+head(topdrug, 4)
+
+## Create new variables indicating whether the drug was found in a particular observation
+# Cocaine
+ind1a = apply(dawn[, c(grep("DRUGID", names(dawn)))], 2, function(x) grep("D03878", x))
+ind1b = sort(unlist(ind1a))
+dawn$COCAINE = rep(0, nrow(dawn))
+dawn$COCAINE[ind1b] = 1
+dawn$COCAINE = as.factor(dawn$COCAINE)
+# Marijuana
+ind2a = apply(dawn[, c(grep("DRUGID", names(dawn)))], 2, function(x) grep("D03879", x))
+ind2b = sort(unlist(ind2a))
+dawn$MARIJUANA = rep(0, nrow(dawn))
+dawn$MARIJUANA[ind2b] = 1
+dawn$MARIJUANA = as.factor(dawn$MARIJUANA)
+# Heroin
+ind3a = apply(dawn[, c(grep("DRUGID", names(dawn)))], 2, function(x) grep("D03877", x))
+ind3b = sort(unlist(ind3a))
+dawn$HEROINE = rep(0, nrow(dawn))
+dawn$HEROINE[ind3b] = 1
+dawn$HEROINE = as.factor(dawn$HEROIN)
+
+## Remove unnecessary variables
+keepvars = c("STRATA", "PSU", "REPLICATE", "PSUFRAME", "CASEWGT", "RACE", "ALCOHOL", 
+             "COCAINE", "MARIJUANA", "HEROINE", "CASETYPE", "SEX",
+             "AGECAT", "DAYPART", "QUARTER", "NUMSUBS")
+mydat = dawn[, keepvars]
+
+## Set up survey design object
+strpsu = unique(mydat[, c("STRATA","PSU")])
+strpsu$one = 1
+strpsu = aggregate(strpsu$one,by = list(strpsu$STRATA), FUN = sum, na.rm = TRUE)
+library(reshape)
+# to rename the function
+strsample = rename(strpsu, c(Group.1 = "STRATA", x = "PSUsample")) 
+strframe = unique(mydat[, c("STRATA","PSUFRAME")])
+strframe = strframe[order(strframe$STRATA),]
+str = merge(strframe, strsample, by = c("STRATA"))
+str = transform(str, n.over.N = PSUsample / PSUFRAME )
+str = subset(str, select = -c(PSUFRAME))
+
+mydat = merge(mydat, str, by = c("STRATA"))
+rm(str, strframe, strsample, strpsu)
+# Survey design for the Taylor-series linearization method 
+library(survey) 
+options(survey.lonely.psu = "adjust" )
+# Create a survey design object (desg) with the DAWN design information
+mydat$zero = 0
+# for 2nd stage fpc
+
+# Design 1 (No Imputation)
+desg = svydesign(id = ~PSU + REPLICATE, strata = ~STRATA + PSU, fpc = ~n.over.N + zero, weights = ~CASEWGT, data = mydat, nest = TRUE )
+
+# Design 2 (KNN Imputation)
+mydat2 = cbind(mydat, test1)
+desg2 = svydesign(id = ~PSU + REPLICATE, strata = ~STRATA + PSU, fpc = ~n.over.N + zero, weights = ~CASEWGT, data = mydat2, nest = TRUE)
+```
+
+#### Written Summary of Data Preparation Process
+
+In order to get our data to this point of the process, we first loaded the data into our environment and then renamed it to something more simple. We then took a look at the data so we could understand the variables and what they mean, as well as how they are related to each other. We noticed that the AGECAT, RACE and SEX variables have many NA values in them, so we decided to impute them. At first, we tried using the Nearest Neighbor Hot Deck function (impute.NN_HD) to do this. For this function to work, we needed to create a vector of distances between the observations, which we tried to do with the dist() function. After we created this distance vector, we tried to used it to impute the NA values for RACE and SEX. However, we could not get this function to work, so we found another function that will impute all NA values using K-Nearest Neighbor Imputation in the DMwR package, which we used to fill in the missing values for AGECAT and SEX.
+
+Next, since the question we decided to answer was whether an individual's usage of a certain drug is distributed identically with the distribution of AGECAT in this population, we wanted to use a Chi-Square Test of Homogeneity on the data. But first, we needed to decide which drugs we wanted to analyze, so we created a function that would give us the top 4 drugs reported in this sample of Emergency Department visits. We had to search through each of the DRUGID variables and count the total number of instances of a particular drug in the entire data frame. We used regular expressions to do this. Using this method, we found that the top 4 reported drugs were Alcohol, Cocaine, Marijuana, and Heroin.
+
+Our next step was to create new variables that indicate whether or not one of these drugs was detected in a particular patient in the sample. We also used regular expressions to search through the drugs mentioned in each of the categories to see if the drug of interest existed in that patient or not. If it was reported, the value of the new variable was set to "1"; if not, it was set to "0". We did this for the 4 top reported drugs in Emergency Department visits of the DAWN 2011 survey.
+
+Finally, to create a survey object from our data, we used the R code provided on the dataset's website. It created a survey object that accounted for not only the unit non-responses experienced in the survey, but also the replicate data that was present. These charactereistics were already embedded in the CASEWGT, PSU, STRATA, and REPLICATE columns of the original survey dataframe, so the function we found simply utilized this to create an accurate survey design object.
+
+#### Chi-Square Tests of Homogeneity
+
+```{r, message = FALSE, warning = FALSE}
+# Chi-Square test between each drug and age
+svychisq(~AGECAT + ALCOHOL, desg2)
+svychisq(~AGECAT + COCAINE, desg2)  
+svychisq(~AGECAT + MARIJUANA, desg2)
+svychisq(~AGECAT + HEROINE, desg2)
+```
+
+#### Graphical Displays of our Results
+
+```{r, message = FALSE, warning = FALSE}
+# Setup
+a1 = svytable(~AGECAT + ALCOHOL, desg2)
+a2 = svytable(~AGECAT + COCAINE, desg2)
+a3 = svytable(~AGECAT + MARIJUANA, desg2)
+a4 = svytable(~AGECAT + HEROINE, desg2)
+
+# Change the names of the AGECAT variable for visual purposes
+rownames(a1) = c("<=5","6-11","12-17","18-20","21-24","25-29","30-34","35-44","45-54","55-64",">=65")
+colnames(a1) = c("0","1")
+rownames(a2) = c("<=5","6-11","12-17","18-20","21-24","25-29","30-34","35-44","45-54","55-64",">=65")
+rownames(a3) = c("<=5","6-11","12-17","18-20","21-24","25-29","30-34","35-44","45-54","55-64",">=65")
+rownames(a4) = c("<=5","6-11","12-17","18-20","21-24","25-29","30-34","35-44","45-54","55-64",">=65")
+
+# Plot Chi-Square Tests results
+quartz() 
+plot(a1, main = "ALCOHOL vs AGECAT", col = rainbow(2))
+plot(a2, main = "COCAINE vs AGECAT", col = rainbow(3))
+plot(a3, main = "MARIJUANA vs AGECAT", col = rainbow(10))
+plot(a4, main = "HEROINE vs AGECAT", col = rainbow(7))
+```
+
+#### Conclusions
+
+From the aforementioned analyses of the DAWN 2011 survey data, there is significant difference between the proportions of patients in each age category that had the selected drugs in their systems when admitted to EDs based on the significant Chi-Square test statistics for Age Category and the drugs selected (Alcohol, Cocaine, Marijuana, and Heroine). For example, the above mosaic plot of Alcohol vs. Age Category shows that the detection of Alcohol is the highest for patients ages 18-20 and is significantly lower for patients younger than 12 and older than 65. The above plot of Cocaine vs. Age Category shows that the detection of Cocaine is high for patients ages 35-44 and 45-54, while it is again significantly lower for youth and seniors. The detection of Marijuana is the highest for age groups 12-17, 18-20, and 21-24. Similarly, Heroine abuse is also the highest in patients aged 21-24 and significantly lower in youth and seniors.   
+	
+Although there are 68 missing values in the variable AGECAT and values are imputed via K-Nearest Neighbor imputation, the number of missing observations is relatively small compared to the large sample size of 229,211. In addition, the distribution of drug detection based on age categories aligns with the general knowledge of substance abuse behaviors across ages for each drug. Therefore, the missing observations should not have significant effect on the result of our Chi-Square tests, and hence, on our conclusions.	
